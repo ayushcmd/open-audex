@@ -1,6 +1,6 @@
 services:
   open-notetaker:
-    image: 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:latest
+    image: 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:${IMAGE_TAG:-latest}
     ports:
       - "127.0.0.1:5173:5173"
     env_file:
@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
 
   open-notetaker-worker:
-    image: 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:latest
+    image: 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:${IMAGE_TAG:-latest}
     command: ["npm", "run", "bot:worker"]
     env_file:
       - .env
