@@ -1,0 +1,16 @@
+services:
+  open-notetaker:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-southeast-2
+        awslogs-group: /opennotetaker/production
+        awslogs-stream: "web-{{.ID}}"
+
+  open-notetaker-worker:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-southeast-2
+        awslogs-group: /opennotetaker/production
+        awslogs-stream: "worker-{{.ID}}"
