@@ -114,6 +114,9 @@ jobs:
             --parameters commands='[
               "set -e",
               "export PATH=\"/usr/local/bin:/usr/bin:/bin:$PATH\"",
+              "echo '=== PRE-DEPLOY SYSTEM DIAGNOSTICS ==='",
+              "df -h /",
+              "docker info --format 'Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}'",
               "cd /home/ubuntu/opennotetaker",
               "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
               "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
@@ -134,16 +137,26 @@ jobs:
 
           aws ssm wait command-executed \
             --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID"
+            --instance-id "$INSTANCE_ID" || true
 
           STATUS=$(aws ssm list-command-invocations \
             --command-id "$COMMAND_ID" \
             --details \
             --query "CommandInvocations[0].Status" --output text)
 
+          STATUS_DETAILS=$(aws ssm list-command-invocations \
+            --command-id "$COMMAND_ID" \
+            --details \
+            --query "CommandInvocations[0].StatusDetails" --output text)
+
+          echo "SSM Command Status: $STATUS ($STATUS_DETAILS)"
+
           if [ "$STATUS" != "Success" ]; then
-            echo "::error::SSM Deployment Failed with status: $STATUS"
+            echo "::error::SSM Deployment Failed with status: $STATUS ($STATUS_DETAILS)"
+            echo "=== SSM Command Standard Output ==="
             aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --query "CommandInvocations[0].CommandPlugins[0].Output" --output text
+            echo "=== SSM Command Standard Error ==="
+            aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --query "CommandInvocations[0].CommandPlugins[0].StandardErrorContent" --output text
             exit 1
           fi
 
