@@ -121,6 +121,7 @@ jobs:
               "df -h /",
               "docker info --format \"Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}\"",
               "cd /home/ubuntu/opennotetaker",
+              "echo 'c2VydmljZXM6CiAgb3Blbi1ub3RldGFrZXI6CiAgICBsb2dnaW5nOgogICAgICBkcml2ZXI6IGF3c2xvZ3MKICAgICAgb3B0aW9uczoKICAgICAgICBhd3Nsb2dzLXJlZ2lvbjogYXAtc291dGhlYXN0LTIKICAgICAgICBhd3Nsb2dzLWdyb3VwOiAvb3Blbm5vdGV0YWtlci9wcm9kdWN0aW9uCiAgICAgICAgYXdzbG9ncy1zdHJlYW06ICJ3ZWIte3suSUR9fSIKCiAgb3Blbi1ub3RldGFrZXItd29ya2VyOgogICAgbG9nZ2luZzoKICAgICAgZHJpdmVyOiBhd3Nsb2dzCiAgICAgIG9wdGlvbnM6CiAgICAgICAgYXdzbG9ncy1yZWdpb246IGFwLXNvdXRoZWFzdC0yCiAgICAgICAgYXdzbG9ncy1ncm91cDogL29wZW5ub3RldGFrZXIvcHJvZHVjdGlvbgogICAgICAgIGF3c2xvZ3Mtc3RyZWFtOiAid29ya2VyLXt7LklEfX0iCg==' | base64 -d > docker-compose.cloudwatch.yml.tmp && docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml.tmp config >/dev/null && mv -f docker-compose.cloudwatch.yml.tmp docker-compose.cloudwatch.yml",
               "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
               "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
               f"if [ -n \"$PREV_IMAGE_ID\" ]; then docker tag \"$PREV_IMAGE_ID\" {registry}/{repo}:rollback || true; fi",
