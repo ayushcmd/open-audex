@@ -113,11 +113,12 @@ jobs:
             --comment "OpenAudex Automated Deployment for commit $DEPLOY_TAG" \
             --parameters commands='[
               "set -e",
+              "export PATH=\"/usr/local/bin:/usr/bin:/bin:$PATH\"",
               "cd /home/ubuntu/opennotetaker",
               "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
               "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
               "if [ -n \"$PREV_IMAGE_ID\" ]; then docker tag \"$PREV_IMAGE_ID\" 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:rollback || true; fi",
-              "aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com",
+              "/usr/local/bin/aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com",
               "docker pull 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:'"$DEPLOY_TAG"'",
               "docker pull 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:latest",
               "IMAGE_TAG='"$DEPLOY_TAG"' docker compose -f docker-compose.prod.yml up -d",
