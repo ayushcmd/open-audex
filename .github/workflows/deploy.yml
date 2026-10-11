@@ -113,7 +113,7 @@ jobs:
             --comment "OpenAudex Automated Deployment for commit $DEPLOY_TAG" \
             --parameters commands='[
               "set -e",
-              "cd ~/opennotetaker",
+              "cd /home/ubuntu/opennotetaker",
               "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
               "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
               "if [ -n \"$PREV_IMAGE_ID\" ]; then docker tag \"$PREV_IMAGE_ID\" 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:rollback || true; fi",
