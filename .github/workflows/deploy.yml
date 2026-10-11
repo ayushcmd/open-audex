@@ -105,32 +105,46 @@ jobs:
             exit 1
           fi
 
-          echo "SSM instance is Online. Dispatching deployment command..."
+          echo "SSM instance is Online. Generating deployment commands payload..."
+
+          python3 -c '
+          import json, os
+
+          deploy_tag = os.environ["DEPLOY_TAG"]
+          registry = os.environ["ECR_REGISTRY"]
+          repo = os.environ["ECR_REPOSITORY"]
+
+          commands = [
+              "set -e",
+              "export PATH=\"/usr/local/bin:/usr/bin:/bin:$PATH\"",
+              "echo === PRE-DEPLOY SYSTEM DIAGNOSTICS ===",
+              "df -h /",
+              "docker info --format \"Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}\"",
+              "cd /home/ubuntu/opennotetaker",
+              "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
+              "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
+              f"if [ -n \"$PREV_IMAGE_ID\" ]; then docker tag \"$PREV_IMAGE_ID\" {registry}/{repo}:rollback || true; fi",
+              f"/usr/local/bin/aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin {registry}",
+              f"docker pull {registry}/{repo}:{deploy_tag}",
+              f"docker pull {registry}/{repo}:latest",
+              f"IMAGE_TAG={deploy_tag} docker compose -f docker-compose.prod.yml up -d",
+              "echo \"Polling host health check on http://127.0.0.1/api/health...\"",
+              "HEALTH_OK=false",
+              "for i in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then HEALTH_OK=true; break; fi; sleep 5; done",
+              "if [ \"$HEALTH_OK\" = \"false\" ]; then echo \"::error::NEW DEPLOYMENT HEALTH CHECK FAILED! Initiating automatic rollback...\"; if [ -n \"$PREV_IMAGE_ID\" ]; then echo \"Restoring previous image ($PREV_IMAGE_ID)...\"; IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml up -d; echo \"Polling rollback health check on http://127.0.0.1/api/health...\"; ROLLBACK_OK=false; for j in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then ROLLBACK_OK=true; break; fi; sleep 5; done; if [ \"$ROLLBACK_OK\" = \"true\" ]; then echo \"Rollback completed successfully! Previous application version restored and healthy.\"; else echo \"::error::CRITICAL: Rollback attempted but rollback health check also failed!\"; fi; else echo \"::error::No previous image ID available on host; rollback impossible.\"; fi; exit 1; fi",
+              f"echo \"Deployment & Health Verification Succeeded for commit {deploy_tag}\""
+          ]
+
+          payload = {"commands": commands}
+          with open("/tmp/ssm_deploy_params.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, indent=2)
+          '
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "OpenAudex Automated Deployment for commit $DEPLOY_TAG" \
-            --parameters commands='[
-              "set -e",
-              "export PATH=\"/usr/local/bin:/usr/bin:/bin:$PATH\"",
-              "echo '=== PRE-DEPLOY SYSTEM DIAGNOSTICS ==='",
-              "df -h /",
-              "docker info --format 'Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}'",
-              "cd /home/ubuntu/opennotetaker",
-              "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
-              "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
-              "if [ -n \"$PREV_IMAGE_ID\" ]; then docker tag \"$PREV_IMAGE_ID\" 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:rollback || true; fi",
-              "/usr/local/bin/aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com",
-              "docker pull 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:'"$DEPLOY_TAG"'",
-              "docker pull 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:latest",
-              "IMAGE_TAG='"$DEPLOY_TAG"' docker compose -f docker-compose.prod.yml up -d",
-              "echo \"Polling host health check on http://127.0.0.1/api/health...\"",
-              "HEALTH_OK=false",
-              "for i in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then HEALTH_OK=true; break; fi; sleep 5; done",
-              "if [ \"$HEALTH_OK\" = \"false\" ]; then echo \"::error::NEW DEPLOYMENT HEALTH CHECK FAILED! Initiating automatic rollback...\"; if [ -n \"$PREV_IMAGE_ID\" ]; then echo \"Restoring previous image ($PREV_IMAGE_ID)...\"; IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml up -d; echo \"Polling rollback health check on http://127.0.0.1/api/health...\"; ROLLBACK_OK=false; for j in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then ROLLBACK_OK=true; break; fi; sleep 5; done; if [ \"$ROLLBACK_OK\" = \"true\" ]; then echo \"Rollback completed successfully! Previous application version restored and healthy.\"; else echo \"::error::CRITICAL: Rollback attempted but rollback health check also failed!\"; fi; else echo \"::error::No previous image ID available on host; rollback impossible.\"; fi; exit 1; fi",
-              "echo \"Deployment & Health Verification Succeeded for commit '"$DEPLOY_TAG"'\""
-            ]' \
+            --parameters "file:///tmp/ssm_deploy_params.json" \
             --query "Command.CommandId" --output text)
 
           echo "SSM Command dispatched (ID: $COMMAND_ID). Waiting for completion..."
