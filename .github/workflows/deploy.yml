@@ -127,11 +127,11 @@ jobs:
               f"/usr/local/bin/aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin {registry}",
               f"docker pull {registry}/{repo}:{deploy_tag}",
               f"docker pull {registry}/{repo}:latest",
-              f"IMAGE_TAG={deploy_tag} docker compose -f docker-compose.prod.yml up -d",
+              f"IMAGE_TAG={deploy_tag} docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml up -d",
               "echo \"Polling host health check on http://127.0.0.1/api/health...\"",
               "HEALTH_OK=false",
               "for i in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then HEALTH_OK=true; break; fi; sleep 5; done",
-              "if [ \"$HEALTH_OK\" = \"false\" ]; then echo \"::error::NEW DEPLOYMENT HEALTH CHECK FAILED! Initiating automatic rollback...\"; if [ -n \"$PREV_IMAGE_ID\" ]; then echo \"Restoring previous image ($PREV_IMAGE_ID)...\"; IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml up -d; echo \"Polling rollback health check on http://127.0.0.1/api/health...\"; ROLLBACK_OK=false; for j in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then ROLLBACK_OK=true; break; fi; sleep 5; done; if [ \"$ROLLBACK_OK\" = \"true\" ]; then echo \"Rollback completed successfully! Previous application version restored and healthy.\"; else echo \"::error::CRITICAL: Rollback attempted but rollback health check also failed!\"; fi; else echo \"::error::No previous image ID available on host; rollback impossible.\"; fi; exit 1; fi",
+              "if [ \"$HEALTH_OK\" = \"false\" ]; then echo \"::error::NEW DEPLOYMENT HEALTH CHECK FAILED! Initiating automatic rollback...\"; if [ -n \"$PREV_IMAGE_ID\" ]; then echo \"Restoring previous image ($PREV_IMAGE_ID)...\"; IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml up -d; echo \"Polling rollback health check on http://127.0.0.1/api/health...\"; ROLLBACK_OK=false; for j in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then ROLLBACK_OK=true; break; fi; sleep 5; done; if [ \"$ROLLBACK_OK\" = \"true\" ]; then echo \"Rollback completed successfully! Previous application version restored and healthy.\"; else echo \"::error::CRITICAL: Rollback attempted but rollback health check also failed!\"; fi; else echo \"::error::No previous image ID available on host; rollback impossible.\"; fi; exit 1; fi",
               f"echo \"Deployment & Health Verification Succeeded for commit {deploy_tag}\""
           ]
 
