@@ -2,7 +2,8 @@ name: Production Deployment
 
 on:
   push:
-    branches: [main]
+    branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -122,6 +123,10 @@ jobs:
               "docker info --format \"Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}\"",
               "cd /home/ubuntu/opennotetaker",
               "echo 'c2VydmljZXM6CiAgb3Blbi1ub3RldGFrZXI6CiAgICBsb2dnaW5nOgogICAgICBkcml2ZXI6IGF3c2xvZ3MKICAgICAgb3B0aW9uczoKICAgICAgICBhd3Nsb2dzLXJlZ2lvbjogYXAtc291dGhlYXN0LTIKICAgICAgICBhd3Nsb2dzLWdyb3VwOiAvb3Blbm5vdGV0YWtlci9wcm9kdWN0aW9uCiAgICAgICAgYXdzbG9ncy1zdHJlYW06ICJ3ZWIte3suSUR9fSIKCiAgb3Blbi1ub3RldGFrZXItd29ya2VyOgogICAgbG9nZ2luZzoKICAgICAgZHJpdmVyOiBhd3Nsb2dzCiAgICAgIG9wdGlvbnM6CiAgICAgICAgYXdzbG9ncy1yZWdpb246IGFwLXNvdXRoZWFzdC0yCiAgICAgICAgYXdzbG9ncy1ncm91cDogL29wZW5ub3RldGFrZXIvcHJvZHVjdGlvbgogICAgICAgIGF3c2xvZ3Mtc3RyZWFtOiAid29ya2VyLXt7LklEfX0iCg==' | base64 -d > docker-compose.cloudwatch.yml.tmp && docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml.tmp config >/dev/null && mv -f docker-compose.cloudwatch.yml.tmp docker-compose.cloudwatch.yml",
+              "PREV_KNOWN_TAG=\"\"",
+              "if [ -f .last_healthy_tag ]; then PREV_KNOWN_TAG=$(cat .last_healthy_tag 2>/dev/null | tr -d '[:space:]'); fi",
+              "if [ -z \"$PREV_KNOWN_TAG\" ]; then RUNNING_IMAGE=$(docker inspect --format=\"{{.Config.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || echo \"\"); PREV_KNOWN_TAG=$(echo \"$RUNNING_IMAGE\" | awk -F':' '{print $NF}'); fi",
+              "echo \"Previous known-good deployment tag: ${PREV_KNOWN_TAG:-none}\"",
               "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
               "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
               f"if [ -n \"$PREV_IMAGE_ID\" ]; then docker tag \"$PREV_IMAGE_ID\" {registry}/{repo}:rollback || true; fi",
@@ -132,7 +137,9 @@ jobs:
               "echo \"Polling host health check on http://127.0.0.1/api/health...\"",
               "HEALTH_OK=false",
               "for i in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then HEALTH_OK=true; break; fi; sleep 5; done",
-              "if [ \"$HEALTH_OK\" = \"false\" ]; then echo \"::error::NEW DEPLOYMENT HEALTH CHECK FAILED! Initiating automatic rollback...\"; if [ -n \"$PREV_IMAGE_ID\" ]; then echo \"Restoring previous image ($PREV_IMAGE_ID)...\"; IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml up -d; echo \"Polling rollback health check on http://127.0.0.1/api/health...\"; ROLLBACK_OK=false; for j in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then ROLLBACK_OK=true; break; fi; sleep 5; done; if [ \"$ROLLBACK_OK\" = \"true\" ]; then echo \"Rollback completed successfully! Previous application version restored and healthy.\"; else echo \"::error::CRITICAL: Rollback attempted but rollback health check also failed!\"; fi; else echo \"::error::No previous image ID available on host; rollback impossible.\"; fi; exit 1; fi",
+              f"if [ \"$HEALTH_OK\" = \"false\" ]; then echo \"::error::NEW DEPLOYMENT HEALTH CHECK FAILED! Initiating resilient rollback...\"; ROLLBACK_RESTORED=false; if docker image inspect {registry}/{repo}:rollback >/dev/null 2>&1; then echo \"Attempting rollback using host-cached image (:rollback)...\"; IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml up -d && ROLLBACK_RESTORED=true; fi; if [ \"$ROLLBACK_RESTORED\" != \"true\" ] && [ -n \"$PREV_KNOWN_TAG\" ] && [ \"$PREV_KNOWN_TAG\" != \"none\" ]; then echo \"Local rollback image unavailable or failed. Pulling verified previous tag from ECR: $PREV_KNOWN_TAG...\"; docker pull {registry}/{repo}:$PREV_KNOWN_TAG || true; IMAGE_TAG=$PREV_KNOWN_TAG docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml up -d && ROLLBACK_RESTORED=true; fi; if [ \"$ROLLBACK_RESTORED\" = \"true\" ]; then echo \"Polling rollback health check on http://127.0.0.1/api/health...\"; ROLLBACK_OK=false; for j in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then ROLLBACK_OK=true; break; fi; sleep 5; done; if [ \"$ROLLBACK_OK\" = \"true\" ]; then echo \"Rollback completed successfully! Previous application version restored and healthy.\"; else echo \"::error::CRITICAL: Rollback container launched but health check failed!\"; fi; else echo \"::error::CRITICAL: Neither local rollback tag nor previous ECR image could be restored!\"; fi; exit 1; fi",
+              f"echo \"{deploy_tag}\" > /home/ubuntu/opennotetaker/.last_healthy_tag",
+              f"docker inspect --format=\"{{{{range .RepoDigests}}}}{{{{.}}}} {{{{end}}}}\" {registry}/{repo}:{deploy_tag} > /home/ubuntu/opennotetaker/.last_healthy_digest 2>/dev/null || true",
               f"echo \"Deployment & Health Verification Succeeded for commit {deploy_tag}\""
           ]
 
