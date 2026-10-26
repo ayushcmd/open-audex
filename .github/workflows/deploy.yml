@@ -1,0 +1,178 @@
+name: Production Deployment
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # Required for GitHub Actions OIDC authentication to AWS
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false # Prevent interrupting active production deployment
+
+jobs:
+  test:
+    name: Pre-Deployment Test Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+  build-and-push-ecr:
+    name: Build & Push Image to ECR
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-southeast-2
+          role-session-name: OpenAudexECRPushSession
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: open-notetaker
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+
+      - name: Push Image Tags to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: open-notetaker
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  deploy-ec2-ssm:
+    name: Deploy to EC2 via AWS Systems Manager
+    needs: build-and-push-ecr
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-southeast-2
+          role-session-name: OpenAudexSSMDeploySession
+
+      - name: Verify SSM Managed Instance Status & Deploy
+        env:
+          INSTANCE_ID: i-04d8d41ffdeb00471
+          DEPLOY_TAG: ${{ github.sha }}
+          ECR_REGISTRY: 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com
+          ECR_REPOSITORY: open-notetaker
+        run: |
+          echo "Checking SSM availability for EC2 instance: $INSTANCE_ID..."
+
+          PING_STATUS=$(aws ssm describe-instance-information \
+            --filters Key=InstanceIds,Values=$INSTANCE_ID \
+            --query "InstanceInformationList[0].PingStatus" --output text 2>/dev/null || echo "UNREGISTERED")
+
+          if [ "$PING_STATUS" != "Online" ]; then
+            echo "::error::SSM Deployment Blocked: EC2 instance $INSTANCE_ID is '$PING_STATUS' in AWS Systems Manager."
+            echo "Missing Prerequisites:"
+            echo "  1. IAM Instance Profile with AmazonSSMManagedInstanceCore attached to instance $INSTANCE_ID."
+            echo "  2. SSM Agent running and online on the EC2 host."
+            echo "  3. IAM Role ($AWS_DEPLOY_ROLE_ARN) authorized for ssm:SendCommand and ssm:GetCommandInvocation."
+            exit 1
+          fi
+
+          echo "SSM instance is Online. Generating deployment commands payload..."
+
+          python3 -c '
+          import json, os
+
+          deploy_tag = os.environ["DEPLOY_TAG"]
+          registry = os.environ["ECR_REGISTRY"]
+          repo = os.environ["ECR_REPOSITORY"]
+
+          commands = [
+              "set -e",
+              "export PATH=\"/usr/local/bin:/usr/bin:/bin:$PATH\"",
+              "echo === PRE-DEPLOY SYSTEM DIAGNOSTICS ===",
+              "df -h /",
+              "docker info --format \"Server Version: {{.ServerVersion}}, Storage Driver: {{.Driver}}\"",
+              "cd /home/ubuntu/opennotetaker",
+              "echo 'c2VydmljZXM6CiAgb3Blbi1ub3RldGFrZXI6CiAgICBsb2dnaW5nOgogICAgICBkcml2ZXI6IGF3c2xvZ3MKICAgICAgb3B0aW9uczoKICAgICAgICBhd3Nsb2dzLXJlZ2lvbjogYXAtc291dGhlYXN0LTIKICAgICAgICBhd3Nsb2dzLWdyb3VwOiAvb3Blbm5vdGV0YWtlci9wcm9kdWN0aW9uCiAgICAgICAgYXdzbG9ncy1zdHJlYW06ICJ3ZWIte3suSUR9fSIKCiAgb3Blbi1ub3RldGFrZXItd29ya2VyOgogICAgbG9nZ2luZzoKICAgICAgZHJpdmVyOiBhd3Nsb2dzCiAgICAgIG9wdGlvbnM6CiAgICAgICAgYXdzbG9ncy1yZWdpb246IGFwLXNvdXRoZWFzdC0yCiAgICAgICAgYXdzbG9ncy1ncm91cDogL29wZW5ub3RldGFrZXIvcHJvZHVjdGlvbgogICAgICAgIGF3c2xvZ3Mtc3RyZWFtOiAid29ya2VyLXt7LklEfX0iCg==' | base64 -d > docker-compose.cloudwatch.yml.tmp && docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml.tmp config >/dev/null && mv -f docker-compose.cloudwatch.yml.tmp docker-compose.cloudwatch.yml",
+              "PREV_IMAGE_ID=$(docker inspect --format=\"{{.Image}}\" opennotetaker-open-notetaker-1 2>/dev/null || docker compose -f docker-compose.prod.yml images -q open-notetaker 2>/dev/null | head -n 1 || echo \"\")",
+              "echo \"Currently running image ID: $PREV_IMAGE_ID\"",
+              f"if [ -n \"$PREV_IMAGE_ID\" ]; then docker tag \"$PREV_IMAGE_ID\" {registry}/{repo}:rollback || true; fi",
+              f"/usr/local/bin/aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin {registry}",
+              f"docker pull {registry}/{repo}:{deploy_tag}",
+              f"docker pull {registry}/{repo}:latest",
+              f"IMAGE_TAG={deploy_tag} docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml up -d",
+              "echo \"Polling host health check on http://127.0.0.1/api/health...\"",
+              "HEALTH_OK=false",
+              "for i in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then HEALTH_OK=true; break; fi; sleep 5; done",
+              "if [ \"$HEALTH_OK\" = \"false\" ]; then echo \"::error::NEW DEPLOYMENT HEALTH CHECK FAILED! Initiating automatic rollback...\"; if [ -n \"$PREV_IMAGE_ID\" ]; then echo \"Restoring previous image ($PREV_IMAGE_ID)...\"; IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml -f docker-compose.cloudwatch.yml up -d; echo \"Polling rollback health check on http://127.0.0.1/api/health...\"; ROLLBACK_OK=false; for j in $(seq 1 12); do if curl -sf http://127.0.0.1/api/health | grep -q \"\\\"ok\\\":true\"; then ROLLBACK_OK=true; break; fi; sleep 5; done; if [ \"$ROLLBACK_OK\" = \"true\" ]; then echo \"Rollback completed successfully! Previous application version restored and healthy.\"; else echo \"::error::CRITICAL: Rollback attempted but rollback health check also failed!\"; fi; else echo \"::error::No previous image ID available on host; rollback impossible.\"; fi; exit 1; fi",
+              f"echo \"Deployment & Health Verification Succeeded for commit {deploy_tag}\""
+          ]
+
+          payload = {"commands": commands}
+          with open("/tmp/ssm_deploy_params.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, indent=2)
+          '
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "OpenAudex Automated Deployment for commit $DEPLOY_TAG" \
+            --parameters "file:///tmp/ssm_deploy_params.json" \
+            --query "Command.CommandId" --output text)
+
+          echo "SSM Command dispatched (ID: $COMMAND_ID). Waiting for completion..."
+
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" || true
+
+          STATUS=$(aws ssm list-command-invocations \
+            --command-id "$COMMAND_ID" \
+            --details \
+            --query "CommandInvocations[0].Status" --output text)
+
+          STATUS_DETAILS=$(aws ssm list-command-invocations \
+            --command-id "$COMMAND_ID" \
+            --details \
+            --query "CommandInvocations[0].StatusDetails" --output text)
+
+          echo "SSM Command Status: $STATUS ($STATUS_DETAILS)"
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "::error::SSM Deployment Failed with status: $STATUS ($STATUS_DETAILS)"
+            echo "=== SSM Command Standard Output ==="
+            aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --query "CommandInvocations[0].CommandPlugins[0].Output" --output text
+            echo "=== SSM Command Standard Error ==="
+            aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --query "CommandInvocations[0].CommandPlugins[0].StandardErrorContent" --output text
+            exit 1
+          fi
+
+          echo "Deployment completed successfully!"

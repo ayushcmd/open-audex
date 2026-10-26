@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/
+.bot-profile/
+coverage/
+.DS_Store
+npm-debug.log*

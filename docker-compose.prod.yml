@@ -1,0 +1,46 @@
+services:
+  open-notetaker:
+    image: 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:${IMAGE_TAG:-latest}
+    ports:
+      - "127.0.0.1:5173:5173"
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      BOT_PROVIDER: fleet
+    volumes:
+      - open-notetaker-data:/app/data
+    shm_size: "1gb"
+    restart: unless-stopped
+
+  open-notetaker-worker:
+    image: 666823181619.dkr.ecr.ap-southeast-2.amazonaws.com/open-notetaker:${IMAGE_TAG:-latest}
+    command: ["npm", "run", "bot:worker"]
+    env_file:
+      - .env
+    environment:
+      OPENNOTETAKER_BASE_URL: http://open-notetaker:5173
+      BOT_PROFILE_SEED_DIR: /seed/bot-profile
+      BOT_CHROME_USER_DATA_DIR: /app/.bot-profile-local
+      BOT_CHROME_EXECUTABLE_PATH: /usr/bin/chromium
+      BOT_CHROME_LAUNCH_MODE: rawcdp
+      BOT_CHROME_EXTRA_ARGS: --no-sandbox --disable-dev-shm-usage --window-size=1280,720 --window-position=0,0 --disable-infobars --test-type
+      BOT_HEADLESS: "false"
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      AUDIO_CAPTURE_DRIVER: pulse
+      AUDIO_CAPTURE_SOURCE: open_notetaker.monitor
+      XVFB_SCREEN: 1280x720x24
+      VIDEO_CAPTURE_DRIVER: x11grab
+      VIDEO_CAPTURE_SOURCE: ":99"
+      VIDEO_SIZE: 1280x720
+    volumes:
+      - open-notetaker-bot-profile:/seed/bot-profile:ro
+    depends_on:
+      - open-notetaker
+    shm_size: "1gb"
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+volumes:
+  open-notetaker-data:
+  open-notetaker-bot-profile:
