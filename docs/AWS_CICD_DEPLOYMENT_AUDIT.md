@@ -6,7 +6,7 @@
 **GitHub Repository:** `https://github.com/ayushcmd/open-audex`  
 **GitHub Repository ID:** `1412988897` (Node ID: `R_kgDOVDh_4Q`)  
 **GitHub Owner:** `ayushcmd` (Account ID: `252997256`)  
-**Git Branch:** `master` (Clean history, commit `b4644fc`)  
+**Git Branch:** `master` (Current commit: `f394690`, tracking `origin/master`)  
 **AWS Account ID:** `666823181619`  
 **AWS Region:** `ap-southeast-2` (Sydney)  
 **AWS CLI Profile:** `ayushcmd` (IAM Identity: `arn:aws:iam::666823181619:user/OpenAudex`)  
@@ -26,13 +26,15 @@ This report delivers a complete, evidence-based technical audit of the OpenAudex
 - **Application Health (VERIFIED LIVE):** `http://15.135.213.78/api/health` responded with `HTTP/1.1 200 OK` and payload:
   `{"ok":true,"botProvider":"fleet","llmProvider":"mock","sttProvider":"deepgram"}`.
 - **Observability (VERIFIED LIVE):** CloudWatch log group `/opennotetaker/production` actively captures container logs via the `awslogs` driver.
+- **Live Infrastructure Untouched:** No live AWS infrastructure or GitHub environment changes were executed. The production server remains completely undisturbed.
 
 ### Pipeline Remediation Status
-- **Local Issues FIXED:**
+- **Local Issues FIXED in Commit `f394690`:**
   1. Updated `.github/workflows/deploy.yml` triggers from `main` to `master` and added `workflow_dispatch`.
   2. Updated `.github/workflows/ci.yml` push and pull-request triggers from `main` to `master`.
   3. Upgraded the deployment script's rollback mechanism to persist known-good tags (`.last_healthy_tag` and `.last_healthy_digest`) and fall back to immutable ECR images if local Docker cache is missing.
   4. Updated `package.json` repository URL to `git+https://github.com/ayushcmd/open-audex.git`.
+  5. Saved policy backup to `docs/iam-trust-policy-backup-20261026.json` and proposed policy to `docs/iam-trust-policy-proposed-20261026.json`.
 - **Remaining Cloud Blockers (REQUIRES APPROVAL):**
   1. **AWS IAM OIDC Trust Policy:** IAM role `GitHubActions-OpenAudex-DeployRole` still trusts old owner `ayushcmdx@310876741`. It must be updated to trust `ayushcmd@252997256`.
   2. **GitHub Environment Policy:** GitHub environment `production` restricts deployments to branch `main`. It must be updated to allow `master`.
@@ -41,7 +43,7 @@ This report delivers a complete, evidence-based technical audit of the OpenAudex
 
 ## 2. Audit Date and Environment Context
 
-- **Execution Timestamp:** 2026-10-26T08:43:00+05:30
+- **Execution Timestamp:** 2026-10-26T09:02:00+05:30
 - **Auditing Environment:** Windows 11 Workstation
 - **CLI Tools:** AWS CLI v2 (`--profile ayushcmd`), GitHub CLI (`gh`), Git, Node.js v24.14.0, Python 3.14
 
@@ -59,8 +61,9 @@ This report delivers a complete, evidence-based technical audit of the OpenAudex
 ## 4. Git Branch and History
 
 - **Current Branch:** `master`
-- **Tracking Branch:** `origin/master` (Up to date)
-- **Commit History:** Clean, linear single commit `b4644fc` ("Initial clean project history").
+- **Tracking Branch:** `origin/master`
+- **Latest Local Commit:** `f394690` ("fix: align AWS deployment with master branch")
+- **Commit Status:** Ahead of `origin/master` by 1 commit (**not pushed**).
 - **Working Tree State:** All modifications are strictly confined to deployment and workflow configuration files; no application business logic or secrets modified.
 
 ---
@@ -161,7 +164,7 @@ Verified via `aws sts get-caller-identity --profile ayushcmd`:
 
 ## 9. IAM and GitHub OIDC Trust Policy
 
-### Current Trust Policy (BLOCKER)
+### Current Trust Policy (BLOCKER — Backed Up in `docs/iam-trust-policy-backup-20261026.json`)
 The current assume-role policy for `GitHubActions-OpenAudex-DeployRole` is hardcoded to the old owner:
 ```json
 {
@@ -187,7 +190,18 @@ The current assume-role policy for `GitHubActions-OpenAudex-DeployRole` is hardc
 }
 ```
 
-### Proposed Narrowly-Scoped Policy (REQUIRES APPROVAL)
+### Verified Subject Claims
+From live GitHub API introspection of `ayushcmd/open-audex`:
+- **Repository ID:** `1412988897`
+- **Owner Account ID:** `252997256`
+- **Owner Login:** `ayushcmd`
+
+1. **Job `build-and-push-ecr`** runs on branch `master` without an environment. Its OIDC token emits:
+   - Immutable format: `repo:ayushcmd@252997256/open-audex@1412988897:ref:refs/heads/master`
+2. **Job `deploy-ec2-ssm`** runs with `environment: production`. Its OIDC token emits:
+   - Immutable format: `repo:ayushcmd@252997256/open-audex@1412988897:environment:production`
+
+### Proposed Minimal Trust Policy (Saved in `docs/iam-trust-policy-proposed-20261026.json`)
 Permits only the active repository `ayushcmd/open-audex` (ID `1412988897`, Owner ID `252997256`), specifically branch `master` and environment `production`:
 ```json
 {
@@ -219,11 +233,14 @@ Permits only the active repository `ayushcmd/open-audex` (ID `1412988897`, Owner
 
 ## 10. GitHub Production Environment Protection
 
-- **Environment Name:** `production`
-- **Protection Rules:** Active custom deployment branch policy.
-- **Current Allowed Branches:** `["main"]` (Policy ID: `62594384`)
+- **Environment Name:** `production` (ID: `23954924431`)
+- **Protection Rules:** Custom deployment branch policy active.
+- **Current Allowed Branches:** `["main"]` (Policy ID: `62594384`).
+- **Reviewers:** None configured.
+- **Wait Timers:** None configured.
+- **Environment Secrets / Variables:** None configured (secrets are managed at the repository level).
 - **Blocker Status:** Deployments executing from `master` are blocked before entering the job.
-- **Required Action (REQUIRES APPROVAL):** Add `master` to allowed branches:
+- **Proposed Command (REQUIRES APPROVAL):**
   ```bash
   gh api -X POST repos/ayushcmd/open-audex/environments/production/deployment-branch-policies -f name=master
   ```
@@ -233,8 +250,8 @@ Permits only the active repository `ayushcmd/open-audex` (ID `1412988897`, Owner
 ## 11. CI Workflow Audit (`.github/workflows/ci.yml`)
 
 - **Triggers:**
-  - `push: branches: [master]` (Updated from `main`)
-  - `pull_request: branches: [master]` (Updated from `main`)
+  - `push: branches: [master]`
+  - `pull_request: branches: [master]`
 - **Jobs:**
   - `test`: Node.js matrix `["22", "24"]`, runs `npm ci`, `npm run check`, `npm test`.
   - `docker`: Builds Docker container `open-notetaker:ci` to guarantee build integrity.
@@ -317,9 +334,9 @@ Rollback relied exclusively on a host-local Docker tag (`:rollback`). If local D
 
 | ID | Finding | Severity | Status | Evidence | Required Action |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **CICD-01** | Workflow triggers targeted `main` instead of `master` | HIGH | **FIXED** | `.github/workflows/deploy.yml` and `ci.yml` diffs | None (Fixed locally) |
-| **CICD-02** | Rollback relied exclusively on host-local image cache | MEDIUM | **FIXED** | Enhanced 2-stage rollback in `deploy.yml` | None (Fixed locally) |
-| **CONF-01** | `package.json` repository URL pointed to upstream | LOW | **FIXED** | `package.json` updated to `ayushcmd/open-audex` | None (Fixed locally) |
+| **CICD-01** | Workflow triggers targeted `main` instead of `master` | HIGH | **FIXED** | `.github/workflows/deploy.yml` and `ci.yml` diffs | None (Fixed in commit `f394690`) |
+| **CICD-02** | Rollback relied exclusively on host-local image cache | MEDIUM | **FIXED** | Enhanced 2-stage rollback in `deploy.yml` | None (Fixed in commit `f394690`) |
+| **CONF-01** | `package.json` repository URL pointed to upstream | LOW | **FIXED** | `package.json` updated to `ayushcmd/open-audex` | None (Fixed in commit `f394690`) |
 | **AUTH-01** | IAM Role trust policy hardcoded to old owner `ayushcmdx` | CRITICAL | **REQUIRES APPROVAL** | `aws iam get-role --profile ayushcmd` | Execute `aws iam update-assume-role-policy` |
 | **GATE-01** | GitHub `production` environment restricts to `main` | CRITICAL | **REQUIRES APPROVAL** | `gh api repos/ayushcmd/open-audex/environments/production/deployment-branch-policies` | Execute `gh api -X POST ... -f name=master` |
 | **NET-01** | Plaintext HTTP / Port 443 not terminating TLS | MEDIUM | **VERIFIED** | `Test-NetConnection -Port 443` returned False | Configure TLS reverse proxy on EC2 |
@@ -332,7 +349,7 @@ Rollback relied exclusively on a host-local Docker tag (`:rollback`). If local D
 
 1. **`npm run check`:** Succeeded (46 modules parsed cleanly).
 2. **PyYAML Workflow Syntax Check:** Succeeded (`.github/workflows/deploy.yml` and `ci.yml`).
-3. **JSON Syntax Validation:** Succeeded (`package.json`).
+3. **JSON Syntax Validation:** Succeeded (`package.json`, `docs/iam-trust-policy-backup-20261026.json`, `docs/iam-trust-policy-proposed-20261026.json`).
 4. **Bash Syntax Verification:** All 25 commands in the updated SSM payload passed `bash -n` validation.
 5. **Live Port 80 HTTP Health Probe:** Succeeded (`HTTP/1.1 200 OK`).
 6. **Port 443 Connection Probe:** Timed out (Confirms HTTPS not yet listening).
@@ -353,44 +370,32 @@ Rollback relied exclusively on a host-local Docker tag (`:rollback`). If local D
 
 ---
 
-## 21. Manual Approval Actions
-
-The following two cloud configuration commands must be approved and executed:
+## 21. Manual Approval Actions & Risk Mitigation
 
 ### Action 1: Update AWS IAM Role OIDC Trust Policy
-```bash
-aws iam update-assume-role-policy \
-  --role-name GitHubActions-OpenAudex-DeployRole \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [
-      {
-        "Effect": "Allow",
-        "Principal": {
-          "Federated": "arn:aws:iam::666823181619:oidc-provider/token.actions.githubusercontent.com"
-        },
-        "Action": "sts:AssumeRoleWithWebIdentity",
-        "Condition": {
-          "StringEquals": {
-            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-            "token.actions.githubusercontent.com:sub": [
-              "repo:ayushcmd@252997256/open-audex@1412988897:ref:refs/heads/master",
-              "repo:ayushcmd@252997256/open-audex@1412988897:environment:production",
-              "repo:ayushcmd/open-audex:ref:refs/heads/master",
-              "repo:ayushcmd/open-audex:environment:production"
-            ]
-          }
-        }
-      }
-    ]
-  }' \
-  --profile ayushcmd
-```
+- **Risk Assessment:** Low risk to live production (role assumption is only used during active deployment). The backup is preserved in `docs/iam-trust-policy-backup-20261026.json`.
+- **Command:**
+  ```powershell
+  aws iam update-assume-role-policy `
+    --role-name GitHubActions-OpenAudex-DeployRole `
+    --policy-document file://docs/iam-trust-policy-proposed-20261026.json `
+    --profile ayushcmd
+  ```
+- **Rollback Instruction:** If needed, restore the previous policy with:
+  ```powershell
+  aws iam update-assume-role-policy `
+    --role-name GitHubActions-OpenAudex-DeployRole `
+    --policy-document file://docs/iam-trust-policy-backup-20261026.json `
+    --profile ayushcmd
+  ```
 
 ### Action 2: Update GitHub Environment Branch Policy
-```bash
-gh api -X POST repos/ayushcmd/open-audex/environments/production/deployment-branch-policies -f name=master
-```
+- **Risk Assessment:** Zero risk to live production. Adds `master` as an allowed branch to the existing `production` environment rule without deleting the `main` rule or changing protection policies.
+- **Command:**
+  ```powershell
+  gh api -X POST repos/ayushcmd/open-audex/environments/production/deployment-branch-policies -f name=master
+  ```
+- **Rollback Instruction:** If needed, delete the policy rule using `gh api -X DELETE repos/ayushcmd/open-audex/environments/production/deployment-branch-policies/<id>`.
 
 ---
 
@@ -399,7 +404,7 @@ gh api -X POST repos/ayushcmd/open-audex/environments/production/deployment-bran
 ### Classification: **BLOCKED**
 
 **Justification:**  
-- **Live Production Status:** **HEALTHY (ONLINE).** The existing deployment on EC2 is serving traffic normally.
+- **Live Production Status:** **HEALTHY & UNTOUCHED.** The existing deployment on EC2 is serving traffic normally.
 - **Automated Pipeline Status:** **BLOCKED.** CI/CD runs will fail at the GitHub `production` environment gate and AWS STS assume-role OIDC stage until the two manual approval actions are executed.
 
 ---

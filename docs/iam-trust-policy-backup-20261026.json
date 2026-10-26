@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::666823181619:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": [
+            "repo:ayushcmdx@310876741/open-audex@1412988897:ref:refs/heads/main",
+            "repo:ayushcmdx@310876741/open-audex@1412988897:environment:production"
+          ]
+        }
+      }
+    }
+  ]
+}
