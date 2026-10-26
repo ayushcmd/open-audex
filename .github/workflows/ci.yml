@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
+    branches: [master]
 
 # The default token needs nothing beyond reading the checked-out code.
 permissions:

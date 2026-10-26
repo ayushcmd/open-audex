@@ -7,7 +7,7 @@
   "description": "Hinglish-first Google Meet notetaker: bot capture, code-switch transcription, diarization, and action-item extraction.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Ascent-AI-org/OpenNotetaker.git"
+    "url": "git+https://github.com/ayushcmd/open-audex.git"
   },
   "keywords": [
     "hinglish",
